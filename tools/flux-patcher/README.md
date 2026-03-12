@@ -23,9 +23,31 @@ python3 tools/flux-patcher/patcher.py init
 ```
 
 ### 2. Apply Custom Patch
-Apply a patch file from any location.
+Apply a patch file from any location, or use interactive selection from project patches.
 ```bash
 python3 tools/flux-patcher/patcher.py apply /path/to/my.patch
+# Or interactive selection
+python3 tools/flux-patcher/patcher.py apply
+```
+
+### 3. List Patches
+List all available patches in the project directories.
+```bash
+python3 tools/flux-patcher/patcher.py list
+```
+
+### 4. Workspace Status
+Check which projects in the workspace have modifications.
+```bash
+python3 tools/flux-patcher/patcher.py status
+```
+
+### 5. Snapshots
+Save and restore workspace states using Git branches.
+```bash
+python3 tools/flux-patcher/patcher.py snapshot my-feature
+# ... make changes ...
+python3 tools/flux-patcher/patcher.py restore my-feature
 ```
 
 ### 3. View Changes

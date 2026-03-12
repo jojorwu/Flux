@@ -47,6 +47,26 @@ class TestFluxPatcher(unittest.TestCase):
         cwd = mock_run.call_args[1].get('cwd')
         self.assertEqual(cwd, self.patcher.workspace_dir / 'paper-server')
 
+    @patch('pathlib.Path.glob', return_value=[Path('/mock/root/patch1.patch')])
+    @patch('pathlib.Path.exists', return_value=True)
+    def test_list_patches(self, mock_exists, mock_glob):
+        patches = self.patcher.list_patches()
+        self.assertEqual(len(patches), 3) # One for each directory
+
+    @patch('subprocess.run')
+    def test_snapshot(self, mock_run):
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.snapshot('test')
+        self.assertTrue(mock_run.called)
+        self.assertIn('checkout', mock_run.call_args[0][0])
+
+    @patch('subprocess.run')
+    def test_restore(self, mock_run):
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.restore('test')
+        self.assertTrue(mock_run.called)
+        self.assertIn('checkout', mock_run.call_args[0][0])
+
     @patch('subprocess.run')
     @patch('os.path.getsize', return_value=100)
     @patch('os.path.exists', return_value=True)

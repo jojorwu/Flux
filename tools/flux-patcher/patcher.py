@@ -191,6 +191,48 @@ class FluxPatcher:
             else:
                 logger.info(f"Project {project}: Not initialized")
 
+    def list_patches(self):
+        patch_dirs = [
+            self.root_dir / "flux-api" / "paper-patches",
+            self.root_dir / "flux-server" / "minecraft-patches",
+            self.root_dir / "flux-server" / "paper-patches"
+        ]
+
+        all_patches = []
+        for pdir in patch_dirs:
+            if pdir.exists():
+                patches = sorted(list(pdir.glob("**/*.patch")))
+                all_patches.extend(patches)
+
+        if not all_patches:
+            logger.info("No patches found in standard directories.")
+            return []
+
+        logger.info(f"Found {len(all_patches)} patches:")
+        for idx, patch in enumerate(all_patches, 1):
+            print(f"{idx:3}. {patch.relative_to(self.root_dir)}")
+
+        return all_patches
+
+    def snapshot(self, name):
+        logger.info(f"Creating snapshot '{name}'...")
+        for project in ["paper-server", "paper-api"]:
+            ws_dir = self.workspace_dir / project
+            if ws_dir.exists():
+                subprocess.run(["git", "checkout", "-b", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
+                logger.info(f"Snapshot created for {project}")
+
+    def restore(self, name):
+        logger.info(f"Restoring snapshot '{name}'...")
+        for project in ["paper-server", "paper-api"]:
+            ws_dir = self.workspace_dir / project
+            if ws_dir.exists():
+                res = subprocess.run(["git", "checkout", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
+                if res.returncode == 0:
+                    logger.info(f"Restored {project} to snapshot-{name}")
+                else:
+                    logger.error(f"Failed to restore {project} to snapshot-{name}")
+
 def main():
     parser = argparse.ArgumentParser(description="Flux Patcher Tool")
     subparsers = parser.add_subparsers(dest="command")
@@ -199,13 +241,21 @@ def main():
     init_parser.add_argument("--skip-gradle", action="store_true", help="Skip running Gradle applyAllPatches")
 
     apply_parser = subparsers.add_parser("apply", help="Apply patch(es)")
-    apply_parser.add_argument("patches", nargs="+", help="Paths to patch files")
+    apply_parser.add_argument("patches", nargs="*", help="Paths to patch files (interactive if empty)")
 
     subparsers.add_parser("diff", help="Show current changes")
 
     subparsers.add_parser("sync", help="Sync changes from workspace to main project")
 
     subparsers.add_parser("status", help="Show workspace status")
+
+    subparsers.add_parser("list", help="List available patches in the project")
+
+    snap_parser = subparsers.add_parser("snapshot", help="Create a workspace snapshot")
+    snap_parser.add_argument("name", help="Name of the snapshot")
+
+    restore_parser = subparsers.add_parser("restore", help="Restore a workspace snapshot")
+    restore_parser.add_argument("name", help="Name of the snapshot to restore")
 
     export_parser = subparsers.add_parser("export", help="Export changes as a patch")
     export_parser.add_argument("name", help="Name of the patch file")
@@ -218,13 +268,30 @@ def main():
     if args.command == "init":
         patcher.init_workspace(skip_gradle=args.skip_gradle)
     elif args.command == "apply":
-        patcher.apply_patch(args.patches)
+        if not args.patches:
+            patches = patcher.list_patches()
+            if patches:
+                try:
+                    val = input("Select patch numbers to apply (comma separated, e.g. 1,3,5): ")
+                    indices = [int(i.strip()) - 1 for i in val.split(",")]
+                    selected = [str(patches[i]) for i in indices if 0 <= i < len(patches)]
+                    patcher.apply_patch(selected)
+                except ValueError:
+                    logger.error("Invalid input.")
+        else:
+            patcher.apply_patch(args.patches)
     elif args.command == "diff":
         patcher.show_diff()
     elif args.command == "sync":
         patcher.apply_to_main()
     elif args.command == "status":
         patcher.show_status()
+    elif args.command == "list":
+        patcher.list_patches()
+    elif args.command == "snapshot":
+        patcher.snapshot(args.name)
+    elif args.command == "restore":
+        patcher.restore(args.name)
     elif args.command == "export":
         patcher.export_patch(args.name)
     elif args.command == "run":
