@@ -95,5 +95,31 @@ class TestFluxPatcher(unittest.TestCase):
         flattened_calls = [item for sublist in calls for item in sublist]
         self.assertIn('apply', flattened_calls)
 
+    @patch('subprocess.run')
+    def test_doctor(self, mock_run):
+        # Mock git --version and java -version
+        mock_run.return_value.stdout = "version 1.0"
+        mock_run.return_value.returncode = 0
+
+        self.patcher.doctor()
+        self.assertTrue(mock_run.called)
+
+    @patch('patcher.FluxPatcher.run_gradle')
+    @patch('patcher.FluxPatcher.apply_to_main')
+    @patch('subprocess.run')
+    def test_rebuild_patches(self, mock_run, mock_sync, mock_gradle):
+        # Mock changes found in flux-server
+        mock_run.return_value.returncode = 1
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.rebuild_patches()
+
+        self.assertTrue(mock_sync.called)
+        self.assertTrue(mock_gradle.called)
+        # Verify it called rebuild tasks for both
+        all_args = [call[0] for call in mock_gradle.call_args_list]
+        flattened_args = [item for sublist in all_args for item in sublist]
+        self.assertIn('rebuildPaperServerPatches', flattened_args)
+        self.assertIn('rebuildPaperApiPatches', flattened_args)
+
 if __name__ == '__main__':
     unittest.main()

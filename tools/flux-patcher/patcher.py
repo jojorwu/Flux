@@ -78,14 +78,14 @@ class FluxPatcher:
 
         logger.info(f"Workspace initialized at {self.workspace_dir}")
 
-    def apply_patch(self, patch_paths):
+    def apply_patch(self, patch_paths, dry_run=False):
         for patch_path in patch_paths:
             patch_path = Path(patch_path).absolute()
             if not patch_path.exists():
                 logger.error(f"Patch not found: {patch_path}")
                 continue
 
-            logger.info(f"Applying patch: {patch_path}")
+            logger.info(f"{'Dry-running' if dry_run else 'Applying'} patch: {patch_path}")
 
             # Heuristic to find the right directory in workspace
             try:
@@ -106,11 +106,16 @@ class FluxPatcher:
                 continue
 
             # Using git apply
+            cmd = ["git", "apply", "--verbose"]
+            if dry_run:
+                cmd.append("--check")
+            cmd.append(str(patch_path))
+
             try:
-                subprocess.run(["git", "apply", "--verbose", str(patch_path)], cwd=target_dir, check=True)
-                logger.info(f"Successfully applied {patch_path.name} to {target_dir.name} (in workspace)")
+                subprocess.run(cmd, cwd=target_dir, check=True)
+                logger.info(f"Successfully {'checked' if dry_run else 'applied'} {patch_path.name} to {target_dir.name} (in workspace)")
             except subprocess.CalledProcessError:
-                logger.error(f"Failed to apply {patch_path.name} to {target_dir.name}")
+                logger.error(f"Failed to {'check' if dry_run else 'apply'} {patch_path.name} to {target_dir.name}")
 
     def show_diff(self):
         for project in ["flux-server", "flux-api"]:
@@ -178,6 +183,29 @@ class FluxPatcher:
         logger.info("Compiling and running server from main project...")
         self.run_gradle(":flux-server:runServer")
 
+    def rebuild_patches(self):
+        # First sync changes to main
+        self.apply_to_main()
+
+        logger.info("Rebuilding patches via Gradle...")
+        # Check which projects have changes to determine which rebuild tasks to run
+        for project in ["flux-server", "flux-api"]:
+            ws_dir = self.workspace_dir / project
+            if not ws_dir.exists():
+                continue
+
+            res = subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ws_dir)
+            if res.returncode != 0:
+                if project == "flux-server":
+                    tasks = ["rebuildPaperServerPatches", "rebuildServerPatches", "rebuildMinecraftPatches"]
+                else:
+                    tasks = ["rebuildPaperApiPatches"]
+
+                logger.info(f"Rebuilding {project} patches...")
+                self.run_gradle(*tasks)
+            else:
+                logger.info(f"No changes in {project}, skipping rebuild.")
+
     def show_status(self):
         logger.info(f"Workspace root: {self.workspace_dir}")
         for project in ["flux-server", "flux-api"]:
@@ -211,7 +239,16 @@ class FluxPatcher:
 
         logger.info(f"Found {len(all_patches)} patches:")
         for idx, patch in enumerate(all_patches, 1):
-            print(f"{idx:3}. {patch.relative_to(self.root_dir)}")
+            subject = "No subject"
+            try:
+                with open(patch, "r", errors="ignore") as f:
+                    for line in f:
+                        if line.startswith("Subject: [PATCH] "):
+                            subject = line.replace("Subject: [PATCH] ", "").strip()
+                            break
+            except Exception:
+                pass
+            print(f"{idx:3}. {patch.relative_to(self.root_dir)} - {subject}")
 
         return all_patches
 
@@ -247,6 +284,35 @@ class FluxPatcher:
                 else:
                     logger.error(f"Failed to restore {project} to snapshot-{name}: {res.stderr.decode().strip()}")
 
+    def doctor(self):
+        logger.info("Checking environment dependencies...")
+
+        # Check Python
+        logger.info(f"Python: {sys.version.split()[0]} - OK")
+
+        # Check Git
+        try:
+            res = subprocess.run(["git", "--version"], capture_output=True, text=True, check=True)
+            logger.info(f"Git: {res.stdout.strip()} - OK")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.error("Git: Not found! Please install Git.")
+
+        # Check Java
+        try:
+            res = subprocess.run(["java", "-version"], capture_output=True, text=True, stderr=subprocess.STDOUT)
+            if "version \"21" in res.stdout or " 21." in res.stdout:
+                logger.info(f"Java: 21 - OK")
+            else:
+                logger.warning(f"Java: Found but might not be version 21. Output: {res.stdout.splitlines()[0] if res.stdout else 'Unknown'}")
+        except FileNotFoundError:
+            logger.error("Java: Not found! Please install Java 21.")
+
+        # Check Gradle executable
+        if self.gradlew.exists():
+            logger.info(f"Gradle wrapper: Found at {self.gradlew} - OK")
+        else:
+            logger.warning(f"Gradle wrapper: Not found at {self.gradlew}")
+
 def main():
     parser = argparse.ArgumentParser(description="Flux Patcher Tool")
     subparsers = parser.add_subparsers(dest="command")
@@ -256,6 +322,7 @@ def main():
 
     apply_parser = subparsers.add_parser("apply", help="Apply patch(es)")
     apply_parser.add_argument("patches", nargs="*", help="Paths to patch files (interactive if empty)")
+    apply_parser.add_argument("--dry-run", action="store_true", help="Don't apply, only check if it can be applied")
 
     subparsers.add_parser("diff", help="Show current changes")
 
@@ -276,7 +343,11 @@ def main():
 
     subparsers.add_parser("run", help="Run test server")
 
+    subparsers.add_parser("rebuild", help="Sync changes and rebuild patches via Gradle")
+
     subparsers.add_parser("clean", help="Remove workspace directory")
+
+    subparsers.add_parser("doctor", help="Check environment dependencies")
 
     args = parser.parse_args()
     patcher = FluxPatcher()
@@ -291,11 +362,11 @@ def main():
                     val = input("Select patch numbers to apply (comma separated, e.g. 1,3,5): ")
                     indices = [int(i.strip()) - 1 for i in val.split(",")]
                     selected = [str(patches[i]) for i in indices if 0 <= i < len(patches)]
-                    patcher.apply_patch(selected)
+                    patcher.apply_patch(selected, dry_run=args.dry_run)
                 except ValueError:
                     logger.error("Invalid input.")
         else:
-            patcher.apply_patch(args.patches)
+            patcher.apply_patch(args.patches, dry_run=args.dry_run)
     elif args.command == "diff":
         patcher.show_diff()
     elif args.command == "sync":
@@ -312,8 +383,12 @@ def main():
         patcher.export_patch(args.name)
     elif args.command == "run":
         patcher.run_test_server()
+    elif args.command == "rebuild":
+        patcher.rebuild_patches()
     elif args.command == "clean":
         patcher.clean_workspace()
+    elif args.command == "doctor":
+        patcher.doctor()
     else:
         parser.print_help()
 
