@@ -35,7 +35,7 @@ class TestFluxPatcher(unittest.TestCase):
 
         self.assertTrue(mock_rmtree.called)
         self.assertTrue(mock_mkdir.called)
-        self.assertEqual(mock_copy.call_count, 2) # paper-server and paper-api
+        self.assertEqual(mock_copy.call_count, 2) # flux-server and flux-api
 
     @patch('pathlib.Path.exists', return_value=True)
     @patch('pathlib.Path.read_text', return_value='diff --git a/net/minecraft/Server.java')
@@ -43,9 +43,9 @@ class TestFluxPatcher(unittest.TestCase):
     def test_apply_patch_server(self, mock_run, mock_read, mock_exists):
         self.patcher.apply_patch(['/mock/test.patch'])
         mock_run.assert_called()
-        # Check if it tried to apply to paper-server
+        # Check if it tried to apply to flux-server
         cwd = mock_run.call_args[1].get('cwd')
-        self.assertEqual(cwd, self.patcher.workspace_dir / 'paper-server')
+        self.assertEqual(cwd, self.patcher.workspace_dir / 'flux-server')
 
     @patch('pathlib.Path.glob', return_value=[Path('/mock/root/patch1.patch')])
     @patch('pathlib.Path.exists', return_value=True)

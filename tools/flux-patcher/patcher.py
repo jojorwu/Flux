@@ -37,7 +37,7 @@ class FluxPatcher:
         logger.info(f"Initializing workspace at {self.workspace_dir}...")
 
         if not skip_gradle:
-            # Ensure paper-server and paper-api are generated in root first
+            # Ensure flux-server and flux-api are generated in root first
             res = self.run_gradle("applyAllPatches")
             if isinstance(res, subprocess.CalledProcessError):
                 logger.error("Failed to apply patches to root project. Aborting workspace init.")
@@ -52,7 +52,7 @@ class FluxPatcher:
             return ["build", ".gradle", "bin", "out", ".git"]
 
         # Copy generated projects to workspace for isolation
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             src = self.root_dir / project
             dst = self.workspace_dir / project
             if src.exists():
@@ -94,11 +94,11 @@ class FluxPatcher:
                 continue
 
             if "a/net/minecraft" in content or "a/com/mojang" in content:
-                target_dir = self.workspace_dir / "paper-server"
-            elif "flux-api" in patch_path.parts or "paper-api" in content:
-                target_dir = self.workspace_dir / "paper-api"
+                target_dir = self.workspace_dir / "flux-server"
+            elif "flux-api" in patch_path.parts or "paper-api" in content or "org.bukkit" in content:
+                target_dir = self.workspace_dir / "flux-api"
             else:
-                target_dir = self.workspace_dir / "paper-server"
+                target_dir = self.workspace_dir / "flux-server"
 
             if not target_dir.exists():
                 logger.error(f"Target directory {target_dir} does not exist. Run 'init' first.")
@@ -112,7 +112,7 @@ class FluxPatcher:
                 logger.error(f"Failed to apply {patch_path.name} to {target_dir.name}")
 
     def show_diff(self):
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             target_dir = self.workspace_dir / project
             if target_dir.exists():
                 print(f"\n--- Changes in {project} ---")
@@ -125,7 +125,7 @@ class FluxPatcher:
             name += ".patch"
 
         found_changes = False
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             target_dir = self.workspace_dir / project
             if not target_dir.exists():
                 continue
@@ -150,7 +150,7 @@ class FluxPatcher:
     def apply_to_main(self):
         """Syncs changes from workspace back to the main project for testing/running."""
         logger.info("Syncing changes from workspace to main project...")
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             main_dir = self.root_dir / project
             if ws_dir.exists() and main_dir.exists():
@@ -179,7 +179,7 @@ class FluxPatcher:
 
     def show_status(self):
         logger.info(f"Workspace root: {self.workspace_dir}")
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             if ws_dir.exists():
                 res = subprocess.run(["git", "status", "--short"], cwd=ws_dir, capture_output=True, text=True)
@@ -216,7 +216,7 @@ class FluxPatcher:
 
     def snapshot(self, name):
         logger.info(f"Creating snapshot '{name}'...")
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             if ws_dir.exists():
                 subprocess.run(["git", "checkout", "-b", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
@@ -224,7 +224,7 @@ class FluxPatcher:
 
     def restore(self, name):
         logger.info(f"Restoring snapshot '{name}'...")
-        for project in ["paper-server", "paper-api"]:
+        for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             if ws_dir.exists():
                 res = subprocess.run(["git", "checkout", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)

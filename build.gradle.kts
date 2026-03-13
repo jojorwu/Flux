@@ -96,6 +96,13 @@ allprojects {
     }
 }
 
+afterEvaluate {
+    tasks.named("applyPaperSingleFilePatches") {
+        mustRunAfter("applyPaperServerFilePatches")
+        mustRunAfter("applyPaperApiFilePatches")
+    }
+}
+
 tasks.register("printMinecraftVersion") {
     doLast {
         println(providers.gradleProperty("mcVersion").get().trim())
