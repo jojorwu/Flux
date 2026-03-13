@@ -1,0 +1,7 @@
+.gradle/
+build/
+__pycache__/
+.flux-workspace/
+patcher_output.log
+patcher_status.log
+tmp_*.patch

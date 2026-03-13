@@ -96,14 +96,27 @@ allprojects {
     }
 }
 
-tasks.register("printMinecraftVersion") {
-    doLast {
-        println(providers.gradleProperty("mcVersion").get().trim())
+afterEvaluate {
+    tasks.named("applyPaperSingleFilePatches") {
+        mustRunAfter("applyPaperServerFilePatches")
+        mustRunAfter("applyPaperApiFilePatches")
     }
 }
 
-tasks.register("printPaperVersion") {
-    doLast {
-        println(project.version)
+abstract class PrintValueTask : DefaultTask() {
+    @get:Input
+    abstract val value: Property<String>
+
+    @TaskAction
+    fun printValue() {
+        println(value.get())
     }
+}
+
+tasks.register<PrintValueTask>("printMinecraftVersion") {
+    value.set(providers.gradleProperty("mcVersion").map { it.trim() })
+}
+
+tasks.register<PrintValueTask>("printPaperVersion") {
+    value.set(project.version.toString())
 }

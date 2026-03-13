@@ -35,7 +35,7 @@ class TestFluxPatcher(unittest.TestCase):
 
         self.assertTrue(mock_rmtree.called)
         self.assertTrue(mock_mkdir.called)
-        self.assertEqual(mock_copy.call_count, 2) # paper-server and paper-api
+        self.assertEqual(mock_copy.call_count, 2) # flux-server and flux-api
 
     @patch('pathlib.Path.exists', return_value=True)
     @patch('pathlib.Path.read_text', return_value='diff --git a/net/minecraft/Server.java')
@@ -43,9 +43,9 @@ class TestFluxPatcher(unittest.TestCase):
     def test_apply_patch_server(self, mock_run, mock_read, mock_exists):
         self.patcher.apply_patch(['/mock/test.patch'])
         mock_run.assert_called()
-        # Check if it tried to apply to paper-server
+        # Check if it tried to apply to flux-server
         cwd = mock_run.call_args[1].get('cwd')
-        self.assertEqual(cwd, self.patcher.workspace_dir / 'paper-server')
+        self.assertEqual(cwd, self.patcher.workspace_dir / 'flux-server')
 
     @patch('pathlib.Path.glob', return_value=[Path('/mock/root/patch1.patch')])
     @patch('pathlib.Path.exists', return_value=True)
@@ -55,17 +55,29 @@ class TestFluxPatcher(unittest.TestCase):
 
     @patch('subprocess.run')
     def test_snapshot(self, mock_run):
+        mock_run.return_value.returncode = 0
         with patch('pathlib.Path.exists', return_value=True):
             self.patcher.snapshot('test')
         self.assertTrue(mock_run.called)
-        self.assertIn('checkout', mock_run.call_args[0][0])
+        # Should call branch -D then checkout -b
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('branch', flattened_calls)
+        self.assertIn('checkout', flattened_calls)
 
     @patch('subprocess.run')
     def test_restore(self, mock_run):
+        mock_run.return_value.returncode = 0
         with patch('pathlib.Path.exists', return_value=True):
             self.patcher.restore('test')
         self.assertTrue(mock_run.called)
         self.assertIn('checkout', mock_run.call_args[0][0])
+
+    @patch('shutil.rmtree')
+    @patch('pathlib.Path.exists', return_value=True)
+    def test_clean_workspace(self, mock_exists, mock_rmtree):
+        self.patcher.clean_workspace()
+        self.assertTrue(mock_rmtree.called)
 
     @patch('subprocess.run')
     @patch('os.path.getsize', return_value=100)
@@ -82,6 +94,97 @@ class TestFluxPatcher(unittest.TestCase):
         calls = [call[0][0] for call in mock_run.call_args_list]
         flattened_calls = [item for sublist in calls for item in sublist]
         self.assertIn('apply', flattened_calls)
+
+    @patch('subprocess.run')
+    def test_doctor(self, mock_run):
+        # Mock git --version and java -version
+        mock_run.return_value.stdout = "version 1.0"
+        mock_run.return_value.returncode = 0
+
+        self.patcher.doctor()
+        self.assertTrue(mock_run.called)
+
+    @patch('patcher.FluxPatcher.run_gradle')
+    @patch('patcher.FluxPatcher.apply_to_main')
+    @patch('subprocess.run')
+    def test_rebuild_patches(self, mock_run, mock_sync, mock_gradle):
+        # Mock changes found in flux-server
+        mock_run.return_value.returncode = 1
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.rebuild_patches()
+
+        self.assertTrue(mock_sync.called)
+        self.assertTrue(mock_gradle.called)
+        # Verify it called rebuild tasks for both
+        all_args = [call[0] for call in mock_gradle.call_args_list]
+        flattened_args = [item for sublist in all_args for item in sublist]
+        self.assertIn('rebuildPaperServerPatches', flattened_args)
+        self.assertIn('rebuildPaperApiPatches', flattened_args)
+
+    @patch('subprocess.run')
+    def test_reset_workspace(self, mock_run):
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.reset_workspace()
+        self.assertTrue(mock_run.called)
+        # Verify it called 'git reset --hard'
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('reset', flattened_calls)
+        self.assertIn('--hard', flattened_calls)
+
+    @patch('subprocess.run')
+    def test_list_snapshots(self, mock_run):
+        mock_run.return_value.stdout = "snapshot-foo\nsnapshot-bar"
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.list_snapshots()
+        self.assertTrue(mock_run.called)
+        self.assertIn('branch', mock_run.call_args[0][0])
+
+    @patch('patcher.FluxPatcher.run_gradle')
+    @patch('patcher.FluxPatcher.apply_to_main')
+    @patch('subprocess.run')
+    def test_run_tests(self, mock_run, mock_sync, mock_gradle):
+        # Mock changes found
+        mock_run.return_value.returncode = 1
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.run_tests()
+
+        self.assertTrue(mock_sync.called)
+        self.assertTrue(mock_gradle.called)
+        # Verify it called test tasks
+        all_args = [call[0] for call in mock_gradle.call_args_list]
+        flattened_args = [item for sublist in all_args for item in sublist]
+        self.assertIn(':flux-server:test', flattened_args)
+        self.assertIn(':flux-api:test', flattened_args)
+
+    @patch('subprocess.run')
+    def test_commit_changes(self, mock_run):
+        # Mock git status showing changes
+        mock_run.return_value.stdout = "M file.java"
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.commit_changes("test commit")
+        self.assertTrue(mock_run.called)
+        # Verify it called 'git commit -m'
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('commit', flattened_calls)
+        self.assertIn('test commit', flattened_calls)
+
+    @patch('patcher.FluxPatcher.get_patch_info')
+    @patch('patcher.FluxPatcher.get_all_patches')
+    def test_search_patches(self, mock_all, mock_info):
+        mock_all.return_value = [self.patcher.root_dir / 'patch1.patch']
+        mock_info.return_value = {"subject": "Fix bug", "author": "me", "date": "now"}
+        self.patcher.search_patches("bug")
+        self.assertTrue(mock_info.called)
+
+    @patch('patcher.FluxPatcher.get_patch_info')
+    @patch('patcher.FluxPatcher.get_all_patches')
+    def test_show_patch_info(self, mock_all, mock_info):
+        mock_all.return_value = [self.patcher.root_dir / 'patch1.patch']
+        mock_info.return_value = {"subject": "Fix bug", "author": "me", "date": "now"}
+        self.patcher.show_patch_info("1")
+        self.assertTrue(mock_info.called)
 
 if __name__ == '__main__':
     unittest.main()
