@@ -11,6 +11,22 @@ from typing import List, Optional, Union
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("flux-patcher")
 
+class Color:
+    """Utility class for colorized console output."""
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    CYAN = '\033[96m'
+    BOLD = '\033[1m'
+    END = '\033[0m'
+
+    @staticmethod
+    def colorize(text: str, color: str) -> str:
+        """Wraps text in ANSI color codes."""
+        if os.name == 'nt':  # Disable colors on Windows by default if not supported
+            return text
+        return f"{color}{text}{Color.END}"
+
 class FluxPatcher:
     """A tool to manage Minecraft patches for the Flux project."""
 
@@ -71,8 +87,8 @@ class FluxPatcher:
 
                     # Check if there are any files to add
                     if any(dst.iterdir()):
-                        subprocess.run(["git", "config", "user.email", "flux@patcher.local"], cwd=dst, check=True)
-                        subprocess.run(["git", "config", "user.name", "Flux Patcher"], cwd=dst, check=True)
+                        subprocess.run(["git", "config", "user.email", "flux@patcher.local"], cwd=dst, check=True, capture_output=True)
+                        subprocess.run(["git", "config", "user.name", "Flux Patcher"], cwd=dst, check=True, capture_output=True)
                         subprocess.run(["git", "add", "-A", "."], cwd=dst, check=True, capture_output=True)
                         # Use -n to skip any hooks that might fail in this minimal env
                         subprocess.run(["git", "commit", "-n", "-m", "Initial state"], cwd=dst, check=True, capture_output=True)
@@ -248,21 +264,26 @@ class FluxPatcher:
 
     def show_status(self) -> None:
         """Shows the initialization and modification status of workspace projects."""
-        logger.info(f"Workspace root: {self.workspace_dir}")
+        logger.info(Color.colorize(f"Workspace root: {self.workspace_dir}", Color.CYAN))
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             if ws_dir.exists():
-                res = subprocess.run(["git", "status", "--short"], cwd=ws_dir, capture_output=True, text=True)
-                changes = res.stdout.strip()
-                if changes:
-                    logger.info(f"Project {project}: Modified\n{changes}")
-                else:
-                    logger.info(f"Project {project}: Clean")
-            else:
-                logger.info(f"Project {project}: Not initialized")
+                # Get current branch
+                branch_res = subprocess.run(["git", "branch", "--show-current"], cwd=ws_dir, capture_output=True, text=True)
+                branch = branch_res.stdout.strip()
+                branch_str = f" [{Color.colorize(branch, Color.BOLD)}]" if branch and branch != "main" else ""
 
-    def list_patches(self) -> List[Path]:
-        """Lists all available patches in the project directories."""
+                status_res = subprocess.run(["git", "status", "--short"], cwd=ws_dir, capture_output=True, text=True)
+                changes = status_res.stdout.strip()
+                if changes:
+                    logger.info(f"Project {Color.colorize(project, Color.BOLD)}{branch_str}: {Color.colorize('Modified', Color.YELLOW)}\n{changes}")
+                else:
+                    logger.info(f"Project {Color.colorize(project, Color.BOLD)}{branch_str}: {Color.colorize('Clean', Color.GREEN)}")
+            else:
+                logger.info(f"Project {Color.colorize(project, Color.BOLD)}: {Color.colorize('Not initialized', Color.RED)}")
+
+    def get_all_patches(self) -> List[Path]:
+        """Retrieves all patch files from the standard directories."""
         patch_dirs = [
             self.root_dir / "flux-api" / "paper-patches",
             self.root_dir / "flux-server" / "minecraft-patches",
@@ -274,25 +295,83 @@ class FluxPatcher:
             if pdir.exists():
                 patches = sorted(list(pdir.glob("**/*.patch")))
                 all_patches.extend(patches)
+        return all_patches
+
+    def get_patch_info(self, patch: Path) -> dict:
+        """Parses subject and other metadata from a patch file."""
+        info = {"subject": "No subject", "author": "Unknown", "date": "Unknown"}
+        try:
+            with open(patch, "r", errors="ignore") as f:
+                for line in f:
+                    if line.startswith("Subject: [PATCH] "):
+                        info["subject"] = line.replace("Subject: [PATCH] ", "").strip()
+                    elif line.startswith("From: "):
+                        info["author"] = line.replace("From: ", "").strip()
+                    elif line.startswith("Date: "):
+                        info["date"] = line.replace("Date: ", "").strip()
+
+                    if info["subject"] != "No subject" and info["author"] != "Unknown" and info["date"] != "Unknown":
+                        break
+        except Exception:
+            pass
+        return info
+
+    def list_patches(self) -> List[Path]:
+        """Lists all available patches in the project directories."""
+        all_patches = self.get_all_patches()
 
         if not all_patches:
-            logger.info("No patches found in standard directories.")
+            logger.info(Color.colorize("No patches found in standard directories.", Color.YELLOW))
             return []
 
-        logger.info(f"Found {len(all_patches)} patches:")
+        logger.info(Color.colorize(f"Found {len(all_patches)} patches:", Color.CYAN))
         for idx, patch in enumerate(all_patches, 1):
-            subject = "No subject"
-            try:
-                with open(patch, "r", errors="ignore") as f:
-                    for line in f:
-                        if line.startswith("Subject: [PATCH] "):
-                            subject = line.replace("Subject: [PATCH] ", "").strip()
-                            break
-            except Exception:
-                pass
-            print(f"{idx:3}. {patch.relative_to(self.root_dir)} - {subject}")
+            info = self.get_patch_info(patch)
+            print(f"{Color.colorize(f'{idx:3}.', Color.BOLD)} {patch.relative_to(self.root_dir)} - {Color.colorize(info['subject'], Color.GREEN)}")
 
         return all_patches
+
+    def search_patches(self, query: str) -> None:
+        """Searches for patches by keyword in filenames or subject lines."""
+        all_patches = self.get_all_patches()
+        results = []
+        query = query.lower()
+
+        for patch in all_patches:
+            info = self.get_patch_info(patch)
+            if query in str(patch).lower() or query in info["subject"].lower():
+                results.append((patch, info))
+
+        if results:
+            logger.info(Color.colorize(f"Found {len(results)} patches matching '{query}':", Color.CYAN))
+            for patch, info in results:
+                print(f" - {Color.colorize(str(patch.relative_to(self.root_dir)), Color.BOLD)}: {Color.colorize(info['subject'], Color.GREEN)}")
+        else:
+            logger.info(Color.colorize(f"No patches matching '{query}' found.", Color.YELLOW))
+
+    def show_patch_info(self, query: str) -> None:
+        """Displays detailed information about a patch by index or filename."""
+        all_patches = self.get_all_patches()
+        selected = None
+
+        if query.isdigit():
+            idx = int(query) - 1
+            if 0 <= idx < len(all_patches):
+                selected = all_patches[idx]
+        else:
+            for patch in all_patches:
+                if query in str(patch):
+                    selected = patch
+                    break
+
+        if selected:
+            info = self.get_patch_info(selected)
+            logger.info(Color.colorize(f"Patch Details: {selected.relative_to(self.root_dir)}", Color.CYAN))
+            print(f"{Color.colorize('Subject:', Color.BOLD)} {Color.colorize(info['subject'], Color.GREEN)}")
+            print(f"{Color.colorize('Author: ', Color.BOLD)} {info['author']}")
+            print(f"{Color.colorize('Date:   ', Color.BOLD)} {info['date']}")
+        else:
+            logger.error(Color.colorize(f"Patch '{query}' not found.", Color.RED))
 
     def snapshot(self, name: str) -> None:
         """Creates a snapshot of the current workspace state using Git branches."""
@@ -310,7 +389,7 @@ class FluxPatcher:
 
     def list_snapshots(self) -> None:
         """Lists all available snapshots in the workspace."""
-        logger.info("Available snapshots:")
+        logger.info(Color.colorize("Available snapshots:", Color.CYAN))
         snapshots = set()
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
@@ -322,9 +401,24 @@ class FluxPatcher:
 
         if snapshots:
             for name in sorted(list(snapshots)):
-                print(f" - {name}")
+                print(f" - {Color.colorize(name, Color.BOLD)}")
         else:
-            logger.info("No snapshots found.")
+            logger.info(Color.colorize("No snapshots found.", Color.YELLOW))
+
+    def commit_changes(self, message: str) -> None:
+        """Commits staged changes in the workspace projects."""
+        logger.info(f"Committing changes in workspace with message: {message}")
+        for project in ["flux-server", "flux-api"]:
+            ws_dir = self.workspace_dir / project
+            if ws_dir.exists():
+                res = subprocess.run(["git", "status", "--short"], cwd=ws_dir, capture_output=True, text=True)
+                if res.stdout.strip():
+                    logger.info(f"Committing in {project}...")
+                    subprocess.run(["git", "add", "-A", "."], cwd=ws_dir, check=True, capture_output=True)
+                    subprocess.run(["git", "commit", "-m", message], cwd=ws_dir, check=True, capture_output=True)
+                    logger.info(f"Committed in {project}.")
+                else:
+                    logger.info(f"No changes in {project} to commit.")
 
     def clean_workspace(self) -> None:
         """Removes the entire workspace directory."""
@@ -404,6 +498,15 @@ def main():
 
     subparsers.add_parser("snapshots", help="List all available snapshots")
 
+    search_parser = subparsers.add_parser("search", help="Search for patches by keyword")
+    search_parser.add_argument("query", help="Keyword to search for")
+
+    info_parser = subparsers.add_parser("info", help="Show detailed patch information")
+    info_parser.add_argument("patch", help="Patch index or partial filename")
+
+    commit_parser = subparsers.add_parser("commit", help="Commit changes in the workspace")
+    commit_parser.add_argument("message", help="Commit message")
+
     export_parser = subparsers.add_parser("export", help="Export changes as a patch")
     export_parser.add_argument("name", help="Name of the patch file")
 
@@ -425,18 +528,31 @@ def main():
     if args.command == "init":
         patcher.init_workspace(skip_gradle=args.skip_gradle)
     elif args.command == "apply":
+        patches = patcher.list_patches()
+        selected = []
         if not args.patches:
-            patches = patcher.list_patches()
             if patches:
                 try:
-                    val = input("Select patch numbers to apply (comma separated, e.g. 1,3,5): ")
+                    val = input(Color.colorize("Select patch numbers to apply (comma separated, e.g. 1,3,5): ", Color.CYAN))
                     indices = [int(i.strip()) - 1 for i in val.split(",")]
                     selected = [str(patches[i]) for i in indices if 0 <= i < len(patches)]
-                    patcher.apply_patch(selected, dry_run=args.dry_run)
                 except ValueError:
-                    logger.error("Invalid input.")
+                    logger.error(Color.colorize("Invalid input.", Color.RED))
         else:
-            patcher.apply_patch(args.patches, dry_run=args.dry_run)
+            for p in args.patches:
+                if p.isdigit():
+                    idx = int(p) - 1
+                    if 0 <= idx < len(patches):
+                        selected.append(str(patches[idx]))
+                    else:
+                        logger.warning(Color.colorize(f"Invalid patch index: {p}", Color.YELLOW))
+                else:
+                    selected.append(p)
+
+        if selected:
+            patcher.apply_patch(selected, dry_run=args.dry_run)
+        else:
+            logger.info(Color.colorize("No patches selected to apply.", Color.YELLOW))
     elif args.command == "diff":
         patcher.show_diff()
     elif args.command == "sync":
@@ -451,6 +567,12 @@ def main():
         patcher.restore(args.name)
     elif args.command == "snapshots":
         patcher.list_snapshots()
+    elif args.command == "search":
+        patcher.search_patches(args.query)
+    elif args.command == "info":
+        patcher.show_patch_info(args.patch)
+    elif args.command == "commit":
+        patcher.commit_changes(args.message)
     elif args.command == "export":
         patcher.export_patch(args.name)
     elif args.command == "run":

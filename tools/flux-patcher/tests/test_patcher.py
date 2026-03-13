@@ -157,5 +157,34 @@ class TestFluxPatcher(unittest.TestCase):
         self.assertIn(':flux-server:test', flattened_args)
         self.assertIn(':flux-api:test', flattened_args)
 
+    @patch('subprocess.run')
+    def test_commit_changes(self, mock_run):
+        # Mock git status showing changes
+        mock_run.return_value.stdout = "M file.java"
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.commit_changes("test commit")
+        self.assertTrue(mock_run.called)
+        # Verify it called 'git commit -m'
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('commit', flattened_calls)
+        self.assertIn('test commit', flattened_calls)
+
+    @patch('patcher.FluxPatcher.get_patch_info')
+    @patch('patcher.FluxPatcher.get_all_patches')
+    def test_search_patches(self, mock_all, mock_info):
+        mock_all.return_value = [self.patcher.root_dir / 'patch1.patch']
+        mock_info.return_value = {"subject": "Fix bug", "author": "me", "date": "now"}
+        self.patcher.search_patches("bug")
+        self.assertTrue(mock_info.called)
+
+    @patch('patcher.FluxPatcher.get_patch_info')
+    @patch('patcher.FluxPatcher.get_all_patches')
+    def test_show_patch_info(self, mock_all, mock_info):
+        mock_all.return_value = [self.patcher.root_dir / 'patch1.patch']
+        mock_info.return_value = {"subject": "Fix bug", "author": "me", "date": "now"}
+        self.patcher.show_patch_info("1")
+        self.assertTrue(mock_info.called)
+
 if __name__ == '__main__':
     unittest.main()
