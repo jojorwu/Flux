@@ -121,5 +121,41 @@ class TestFluxPatcher(unittest.TestCase):
         self.assertIn('rebuildPaperServerPatches', flattened_args)
         self.assertIn('rebuildPaperApiPatches', flattened_args)
 
+    @patch('subprocess.run')
+    def test_reset_workspace(self, mock_run):
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.reset_workspace()
+        self.assertTrue(mock_run.called)
+        # Verify it called 'git reset --hard'
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('reset', flattened_calls)
+        self.assertIn('--hard', flattened_calls)
+
+    @patch('subprocess.run')
+    def test_list_snapshots(self, mock_run):
+        mock_run.return_value.stdout = "snapshot-foo\nsnapshot-bar"
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.list_snapshots()
+        self.assertTrue(mock_run.called)
+        self.assertIn('branch', mock_run.call_args[0][0])
+
+    @patch('patcher.FluxPatcher.run_gradle')
+    @patch('patcher.FluxPatcher.apply_to_main')
+    @patch('subprocess.run')
+    def test_run_tests(self, mock_run, mock_sync, mock_gradle):
+        # Mock changes found
+        mock_run.return_value.returncode = 1
+        with patch('pathlib.Path.exists', return_value=True):
+            self.patcher.run_tests()
+
+        self.assertTrue(mock_sync.called)
+        self.assertTrue(mock_gradle.called)
+        # Verify it called test tasks
+        all_args = [call[0] for call in mock_gradle.call_args_list]
+        flattened_args = [item for sublist in all_args for item in sublist]
+        self.assertIn(':flux-server:test', flattened_args)
+        self.assertIn(':flux-api:test', flattened_args)
+
 if __name__ == '__main__':
     unittest.main()

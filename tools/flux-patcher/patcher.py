@@ -5,18 +5,23 @@ import sys
 import shutil
 import logging
 from pathlib import Path
+from typing import List, Optional, Union
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger("flux-patcher")
 
 class FluxPatcher:
+    """A tool to manage Minecraft patches for the Flux project."""
+
     def __init__(self):
+        """Initializes the FluxPatcher with root and workspace directories."""
         self.root_dir = self.find_root()
         self.workspace_dir = self.root_dir / ".flux-workspace"
         self.gradlew = self.root_dir / ("gradlew.bat" if os.name == "nt" else "gradlew")
 
-    def find_root(self):
+    def find_root(self) -> Path:
+        """Finds the root directory of the project by looking for gradlew and flux-server."""
         curr = Path(os.getcwd()).absolute()
         while curr != curr.parent:
             if (curr / "gradlew").exists() and (curr / "flux-server").exists():
@@ -24,7 +29,8 @@ class FluxPatcher:
             curr = curr.parent
         return Path(os.getcwd()).absolute()
 
-    def run_gradle(self, *args):
+    def run_gradle(self, *args: str) -> Union[subprocess.CompletedProcess, subprocess.CalledProcessError]:
+        """Runs a Gradle task using the project's Gradle wrapper."""
         cmd = [str(self.gradlew)] + list(args)
         logger.info(f"Running Gradle: {' '.join(cmd)}")
         try:
@@ -33,7 +39,8 @@ class FluxPatcher:
             logger.error(f"Gradle command failed with exit code {e.returncode}")
             return e
 
-    def init_workspace(self, skip_gradle=False):
+    def init_workspace(self, skip_gradle: bool = False) -> None:
+        """Initializes the workspace by applying patches and copying projects."""
         logger.info(f"Initializing workspace at {self.workspace_dir}...")
 
         if not skip_gradle:
@@ -78,7 +85,8 @@ class FluxPatcher:
 
         logger.info(f"Workspace initialized at {self.workspace_dir}")
 
-    def apply_patch(self, patch_paths, dry_run=False):
+    def apply_patch(self, patch_paths: List[str], dry_run: bool = False) -> None:
+        """Applies one or more patch files to the workspace."""
         for patch_path in patch_paths:
             patch_path = Path(patch_path).absolute()
             if not patch_path.exists():
@@ -117,7 +125,8 @@ class FluxPatcher:
             except subprocess.CalledProcessError:
                 logger.error(f"Failed to {'check' if dry_run else 'apply'} {patch_path.name} to {target_dir.name}")
 
-    def show_diff(self):
+    def show_diff(self) -> None:
+        """Shows the Git diff of all projects in the workspace."""
         for project in ["flux-server", "flux-api"]:
             target_dir = self.workspace_dir / project
             if target_dir.exists():
@@ -126,7 +135,8 @@ class FluxPatcher:
             else:
                 logger.debug(f"Project {project} not in workspace.")
 
-    def export_patch(self, name):
+    def export_patch(self, name: str) -> None:
+        """Exports local changes from the workspace into patch files."""
         if not name.endswith(".patch"):
             name += ".patch"
 
@@ -153,7 +163,7 @@ class FluxPatcher:
         if not found_changes:
             logger.info("No changes found in workspace to export.")
 
-    def apply_to_main(self):
+    def apply_to_main(self) -> None:
         """Syncs changes from workspace back to the main project for testing/running."""
         logger.info("Syncing changes from workspace to main project...")
         for project in ["flux-server", "flux-api"]:
@@ -177,13 +187,32 @@ class FluxPatcher:
                     if os.path.exists(patch_file):
                         os.remove(patch_file)
 
-    def run_test_server(self):
+    def run_test_server(self) -> None:
+        """Compiles and runs the server from the main project."""
         # First sync changes to main because 'runServer' runs on the main project
         self.apply_to_main()
         logger.info("Compiling and running server from main project...")
         self.run_gradle(":flux-server:runServer")
 
-    def rebuild_patches(self):
+    def run_tests(self) -> None:
+        """Syncs changes and runs Gradle tests for modified projects."""
+        self.apply_to_main()
+
+        logger.info("Running Gradle tests...")
+        for project in ["flux-server", "flux-api"]:
+            ws_dir = self.workspace_dir / project
+            if not ws_dir.exists():
+                continue
+
+            res = subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ws_dir)
+            if res.returncode != 0:
+                logger.info(f"Running tests for {project}...")
+                self.run_gradle(f":{project}:test")
+            else:
+                logger.info(f"No changes in {project}, skipping tests.")
+
+    def rebuild_patches(self) -> None:
+        """Syncs changes and triggers Gradle rebuild tasks for patches."""
         # First sync changes to main
         self.apply_to_main()
 
@@ -206,7 +235,19 @@ class FluxPatcher:
             else:
                 logger.info(f"No changes in {project}, skipping rebuild.")
 
-    def show_status(self):
+    def reset_workspace(self) -> None:
+        """Discards all local changes in the workspace using Git reset and clean."""
+        logger.info("Resetting workspace projects...")
+        for project in ["flux-server", "flux-api"]:
+            ws_dir = self.workspace_dir / project
+            if ws_dir.exists():
+                logger.info(f"Resetting {project}...")
+                subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=ws_dir, check=True, capture_output=True)
+                subprocess.run(["git", "clean", "-fd"], cwd=ws_dir, check=True, capture_output=True)
+                logger.info(f"{project} reset.")
+
+    def show_status(self) -> None:
+        """Shows the initialization and modification status of workspace projects."""
         logger.info(f"Workspace root: {self.workspace_dir}")
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
@@ -220,7 +261,8 @@ class FluxPatcher:
             else:
                 logger.info(f"Project {project}: Not initialized")
 
-    def list_patches(self):
+    def list_patches(self) -> List[Path]:
+        """Lists all available patches in the project directories."""
         patch_dirs = [
             self.root_dir / "flux-api" / "paper-patches",
             self.root_dir / "flux-server" / "minecraft-patches",
@@ -252,7 +294,8 @@ class FluxPatcher:
 
         return all_patches
 
-    def snapshot(self, name):
+    def snapshot(self, name: str) -> None:
+        """Creates a snapshot of the current workspace state using Git branches."""
         logger.info(f"Creating snapshot '{name}'...")
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
@@ -265,7 +308,26 @@ class FluxPatcher:
                 else:
                     logger.error(f"Failed to create snapshot for {project}: {res.stderr.decode().strip()}")
 
-    def clean_workspace(self):
+    def list_snapshots(self) -> None:
+        """Lists all available snapshots in the workspace."""
+        logger.info("Available snapshots:")
+        snapshots = set()
+        for project in ["flux-server", "flux-api"]:
+            ws_dir = self.workspace_dir / project
+            if ws_dir.exists():
+                res = subprocess.run(["git", "branch", "--list", "snapshot-*"], cwd=ws_dir, capture_output=True, text=True)
+                for line in res.stdout.splitlines():
+                    name = line.strip().replace("* ", "").replace("snapshot-", "")
+                    snapshots.add(name)
+
+        if snapshots:
+            for name in sorted(list(snapshots)):
+                print(f" - {name}")
+        else:
+            logger.info("No snapshots found.")
+
+    def clean_workspace(self) -> None:
+        """Removes the entire workspace directory."""
         if self.workspace_dir.exists():
             logger.info(f"Removing workspace at {self.workspace_dir}...")
             shutil.rmtree(self.workspace_dir)
@@ -273,7 +335,8 @@ class FluxPatcher:
         else:
             logger.info("No workspace found to clean.")
 
-    def restore(self, name):
+    def restore(self, name: str) -> None:
+        """Restores the workspace state from a named snapshot."""
         logger.info(f"Restoring snapshot '{name}'...")
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
@@ -284,7 +347,8 @@ class FluxPatcher:
                 else:
                     logger.error(f"Failed to restore {project} to snapshot-{name}: {res.stderr.decode().strip()}")
 
-    def doctor(self):
+    def doctor(self) -> None:
+        """Checks for missing or incorrect environment dependencies."""
         logger.info("Checking environment dependencies...")
 
         # Check Python
@@ -338,12 +402,18 @@ def main():
     restore_parser = subparsers.add_parser("restore", help="Restore a workspace snapshot")
     restore_parser.add_argument("name", help="Name of the snapshot to restore")
 
+    subparsers.add_parser("snapshots", help="List all available snapshots")
+
     export_parser = subparsers.add_parser("export", help="Export changes as a patch")
     export_parser.add_argument("name", help="Name of the patch file")
 
     subparsers.add_parser("run", help="Run test server")
 
+    subparsers.add_parser("test", help="Run Gradle tests for modified projects")
+
     subparsers.add_parser("rebuild", help="Sync changes and rebuild patches via Gradle")
+
+    subparsers.add_parser("reset", help="Discard all changes in the workspace")
 
     subparsers.add_parser("clean", help="Remove workspace directory")
 
@@ -379,12 +449,18 @@ def main():
         patcher.snapshot(args.name)
     elif args.command == "restore":
         patcher.restore(args.name)
+    elif args.command == "snapshots":
+        patcher.list_snapshots()
     elif args.command == "export":
         patcher.export_patch(args.name)
     elif args.command == "run":
         patcher.run_test_server()
+    elif args.command == "test":
+        patcher.run_tests()
     elif args.command == "rebuild":
         patcher.rebuild_patches()
+    elif args.command == "reset":
+        patcher.reset_workspace()
     elif args.command == "clean":
         patcher.clean_workspace()
     elif args.command == "doctor":
