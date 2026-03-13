@@ -55,17 +55,29 @@ class TestFluxPatcher(unittest.TestCase):
 
     @patch('subprocess.run')
     def test_snapshot(self, mock_run):
+        mock_run.return_value.returncode = 0
         with patch('pathlib.Path.exists', return_value=True):
             self.patcher.snapshot('test')
         self.assertTrue(mock_run.called)
-        self.assertIn('checkout', mock_run.call_args[0][0])
+        # Should call branch -D then checkout -b
+        calls = [call[0][0] for call in mock_run.call_args_list]
+        flattened_calls = [item for sublist in calls for item in sublist]
+        self.assertIn('branch', flattened_calls)
+        self.assertIn('checkout', flattened_calls)
 
     @patch('subprocess.run')
     def test_restore(self, mock_run):
+        mock_run.return_value.returncode = 0
         with patch('pathlib.Path.exists', return_value=True):
             self.patcher.restore('test')
         self.assertTrue(mock_run.called)
         self.assertIn('checkout', mock_run.call_args[0][0])
+
+    @patch('shutil.rmtree')
+    @patch('pathlib.Path.exists', return_value=True)
+    def test_clean_workspace(self, mock_exists, mock_rmtree):
+        self.patcher.clean_workspace()
+        self.assertTrue(mock_rmtree.called)
 
     @patch('subprocess.run')
     @patch('os.path.getsize', return_value=100)

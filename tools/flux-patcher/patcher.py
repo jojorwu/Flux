@@ -59,19 +59,20 @@ class FluxPatcher:
                 logger.info(f"Copying {project} to workspace...")
                 shutil.copytree(src, dst, ignore=ignore_build)
                 # Initialize a temporary git repo in the workspace for diffing/patching
-                subprocess.run(["git", "init", "-b", "main"], cwd=dst, check=True, capture_output=True)
+                try:
+                    subprocess.run(["git", "init", "-b", "main"], cwd=dst, check=True, capture_output=True)
 
-                # Check if there are any files to add
-                if any(dst.iterdir()):
-                    subprocess.run(["git", "add", "-A", "."], cwd=dst, check=True, capture_output=True)
-                    # Use -n to skip any hooks that might fail in this minimal env
-                    # We also handle failure to commit (e.g. if no changes to commit)
-                    try:
+                    # Check if there are any files to add
+                    if any(dst.iterdir()):
+                        subprocess.run(["git", "config", "user.email", "flux@patcher.local"], cwd=dst, check=True)
+                        subprocess.run(["git", "config", "user.name", "Flux Patcher"], cwd=dst, check=True)
+                        subprocess.run(["git", "add", "-A", "."], cwd=dst, check=True, capture_output=True)
+                        # Use -n to skip any hooks that might fail in this minimal env
                         subprocess.run(["git", "commit", "-n", "-m", "Initial state"], cwd=dst, check=True, capture_output=True)
-                    except subprocess.CalledProcessError as e:
-                        logger.warning(f"Failed to create initial commit in {project}: {e.stderr.decode().strip()}")
-                else:
-                    logger.warning(f"Project directory {project} in workspace is empty.")
+                    else:
+                        logger.warning(f"Project directory {project} in workspace is empty.")
+                except subprocess.CalledProcessError as e:
+                    logger.error(f"Failed to initialize git in {project}: {e.stderr.decode().strip()}")
             else:
                 logger.warning(f"Project directory {project} not found in root. Skipping.")
 
@@ -93,9 +94,9 @@ class FluxPatcher:
                 logger.error(f"Failed to read patch file {patch_path}: {e}")
                 continue
 
-            if "a/net/minecraft" in content or "a/com/mojang" in content:
+            if any(x in content for x in ["a/net/minecraft", "a/com/mojang", "a/org/bukkit/craftbukkit", "a/org/spigotmc", "a/src/main/java/ca/spottedleaf/moonrise"]):
                 target_dir = self.workspace_dir / "flux-server"
-            elif "flux-api" in patch_path.parts or "paper-api" in content or "org.bukkit" in content:
+            elif "flux-api" in patch_path.parts or "paper-api" in content or "a/org/bukkit" in content:
                 target_dir = self.workspace_dir / "flux-api"
             else:
                 target_dir = self.workspace_dir / "flux-server"
@@ -219,8 +220,21 @@ class FluxPatcher:
         for project in ["flux-server", "flux-api"]:
             ws_dir = self.workspace_dir / project
             if ws_dir.exists():
-                subprocess.run(["git", "checkout", "-b", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
-                logger.info(f"Snapshot created for {project}")
+                # Delete branch if it exists to allow overwriting snapshots
+                subprocess.run(["git", "branch", "-D", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
+                res = subprocess.run(["git", "checkout", "-b", f"snapshot-{name}"], cwd=ws_dir, capture_output=True)
+                if res.returncode == 0:
+                    logger.info(f"Snapshot created for {project}")
+                else:
+                    logger.error(f"Failed to create snapshot for {project}: {res.stderr.decode().strip()}")
+
+    def clean_workspace(self):
+        if self.workspace_dir.exists():
+            logger.info(f"Removing workspace at {self.workspace_dir}...")
+            shutil.rmtree(self.workspace_dir)
+            logger.info("Workspace cleaned.")
+        else:
+            logger.info("No workspace found to clean.")
 
     def restore(self, name):
         logger.info(f"Restoring snapshot '{name}'...")
@@ -231,7 +245,7 @@ class FluxPatcher:
                 if res.returncode == 0:
                     logger.info(f"Restored {project} to snapshot-{name}")
                 else:
-                    logger.error(f"Failed to restore {project} to snapshot-{name}")
+                    logger.error(f"Failed to restore {project} to snapshot-{name}: {res.stderr.decode().strip()}")
 
 def main():
     parser = argparse.ArgumentParser(description="Flux Patcher Tool")
@@ -261,6 +275,8 @@ def main():
     export_parser.add_argument("name", help="Name of the patch file")
 
     subparsers.add_parser("run", help="Run test server")
+
+    subparsers.add_parser("clean", help="Remove workspace directory")
 
     args = parser.parse_args()
     patcher = FluxPatcher()
@@ -296,6 +312,8 @@ def main():
         patcher.export_patch(args.name)
     elif args.command == "run":
         patcher.run_test_server()
+    elif args.command == "clean":
+        patcher.clean_workspace()
     else:
         parser.print_help()
 
